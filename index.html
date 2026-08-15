@@ -205,17 +205,14 @@
         bindButton('btnThrottleUp', 'throttleUp');
         bindButton('btnThrottleDown', 'throttleDown');
 
-        // Create a Procedural Custom A320 Aircraft Entity using user's geometry profile nodes
-        // Generating a composite structured aircraft entity representation from model data specs
+        // Create a Procedural Custom A320 Aircraft Entity
         const planeEntity = viewer.entities.add({
             position: new Cesium.CallbackProperty(() => planePosition, false),
             orientation: new Cesium.CallbackProperty(() => {
-                // Compute orientation matrix based on heading, pitch, roll
                 const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
                 return Cesium.Transforms.headingPitchRollQuaternion(planePosition, hpr);
             }, false),
             model: {
-                // Using a reliable stock glTF sample aircraft model or primitive fallback box if offline
                 uri: 'https://cesium.com/content/CesiumAir/CesiumAir.gltf',
                 minimumPixelSize: 64,
                 maximumScale: 20000
@@ -270,7 +267,8 @@
             // Prevent flying below ground level terrain
             if (cartographic.height < 5.0) cartographic.height = 5.0;
 
-            planePosition = Cesium.Cartesian3.fromCartesian(Cesium.Cartographic.toCartesian(cartographic));
+            // Fixed conversion function call
+            planePosition = Cesium.Cartographic.toCartesian(cartographic);
 
             // Update Telemetry HUD text bindings
             document.getElementById('hudSpeed').innerText = speed.toFixed(0);
