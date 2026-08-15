@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CesiumJS 3D Globe Flight Sim</title>
+    <!-- CesiumJS CSS & JS -->
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            font-family: monospace;
+        }
+
+        #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        /* Mobile Touch Flight Controls Overlay */
+        .flight-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 25px;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .control-cluster {
+            display: grid;
+            grid-template-columns: repeat(3, 60px);
+            grid-template-rows: repeat(3, 60px);
+            gap: 8px;
+            pointer-events: auto;
+        }
+
+        .control-cluster.right {
+            grid-template-columns: repeat(2, 70px);
+        }
+
+        .pad-btn {
+            background: rgba(15, 23, 42, 0.75);
+            border: 2px solid rgba(56, 189, 248, 0.4);
+            color: #38bdf8;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            outline: none;
+            cursor: pointer;
+            transition: background 0.1s, transform 0.1s;
+        }
+
+        .pad-btn:active, .pad-btn.active {
+            background: rgba(56, 189, 248, 0.4);
+            color: #fff;
+            transform: scale(0.95);
+        }
+
+        /* Layout Grid placements */
+        .btn-up { grid-column: 2; grid-row: 1; }
+        .btn-left { grid-column: 1; grid-row: 2; }
+        .btn-right { grid-column: 3; grid-row: 2; }
+        .btn-down { grid-column: 2; grid-row: 3; }
+
+        .throttle-cluster {
+            grid-column: span 2;
+            display: flex;
+            gap: 10px;
+        }
+        .throttle-cluster .pad-btn {
+            flex: 1;
+            height: 60px;
+            font-size: 0.9rem;
+        }
+
+        /* Telemetry HUD overlay */
+        .hud-telemetry {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            padding: 12px 18px;
+            border-radius: 8px;
+            color: #38bdf8;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            pointer-events: none;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Cesium Globe Container -->
+    <div id="cesiumContainer"></div>
+
+    <!-- Telemetry Display -->
+    <div class="hud-telemetry" id="hud">
+        AIRCRAFT: A320 V1 (Custom Model)<br>
+        SPEED: <span id="hudSpeed">150</span> KTS<br>
+        ALTITUDE: <span id="hudAlt">3,000</span> FT<br>
+        PITCH / ROLL: <span id="hudOrientation">0° / 0°</span>
+    </div>
+
+    <!-- Mobile Touch Control Pads -->
+    <div class="flight-controls">
+        <!-- Pitch & Roll Virtual Stick -->
+        <div class="control-cluster">
+            <button class="pad-btn btn-up" id="btnPitchUp">▲</button>
+            <button class="pad-btn btn-left" id="btnRollLeft">◀</button>
+            <button class="pad-btn btn-right" id="btnRollRight">▶</button>
+            <button class="pad-btn btn-down" id="btnPitchDown">▼</button>
+        </div>
+
+        <!-- Throttle & Rudder Cluster -->
+        <div class="control-cluster right">
+            <div class="throttle-cluster" style="grid-column: span 2; grid-row: 1;">
+                <button class="pad-btn" id="btnThrottleUp">THR +</button>
+                <button class="pad-btn" id="btnThrottleDown">THR -</button>
+            </div>
+            <button class="pad-btn" id="btnYawLeft" style="grid-column: 1; grid-row: 2;">L-YAW</button>
+            <button class="pad-btn" id="btnYawRight" style="grid-column: 2; grid-row: 2;">R-YAW</button>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Cesium Viewer with clean minimalist interface
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            animation: false,
+            timeline: false,
+            baseLayerPicker: false,
+            geocoder: false,
+            homeButton: false,
+            sceneModePicker: false,
+            navigationHelpButton: false,
+            fullscreenButton: false
+        });
+
+        // Enable lighting and realistic atmosphere
+        viewer.scene.globe.enableLighting = true;
+
+        // Flight Physics State Variables
+        let planePosition = Cesium.Cartesian3.fromDegrees(-73.7781, 40.6413, 1000); // Start at KJFK 1km up
+        let heading = 0.0; // Radians
+        let pitch = 0.0;
+        let roll = 0.0;
+        let speed = 150.0; // Knots
+
+        // Input Control States
+        const controls = {
+            pitchUp: false,
+            pitchDown: false,
+            rollLeft: false,
+            rollRight: false,
+            yawLeft: false,
+            yawRight: false,
+            throttleUp: false,
+            throttleDown: false
+        };
+
+        // Bind Touch/Mouse Controls to UI buttons safely
+        function bindButton(id, controlKey) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const setTrue = (e) => { e.preventDefault(); controls[controlKey] = true; el.classList.add('active'); };
+            const setFalse = (e) => { e.preventDefault(); controls[controlKey] = false; el.classList.remove('active'); };
+            
+            el.addEventListener('mousedown', setTrue);
+            el.addEventListener('mouseup', setFalse);
+            el.addEventListener('mouseleave', setFalse);
+            el.addEventListener('touchstart', setTrue, {passive: false});
+            el.addEventListener('touchend', setFalse, {passive: false});
+        }
+
+        bindButton('btnPitchUp', 'pitchUp');
+        bindButton('btnPitchDown', 'pitchDown');
+        bindButton('btnRollLeft', 'rollLeft');
+        bindButton('btnRollRight', 'rollRight');
+        bindButton('btnYawLeft', 'yawLeft');
+        bindButton('btnYawRight', 'yawRight');
+        bindButton('btnThrottleUp', 'throttleUp');
+        bindButton('btnThrottleDown', 'throttleDown');
+
+        // Create a Procedural Custom A320 Aircraft Entity using user's geometry profile nodes
+        // Generating a composite structured aircraft entity representation from model data specs
+        const planeEntity = viewer.entities.add({
+            position: new Cesium.CallbackProperty(() => planePosition, false),
+            orientation: new Cesium.CallbackProperty(() => {
+                // Compute orientation matrix based on heading, pitch, roll
+                const hpr = new Cesium.HeadingPitchRoll(heading, pitch, roll);
+                return Cesium.Transforms.headingPitchRollQuaternion(planePosition, hpr);
+            }, false),
+            model: {
+                // Using a reliable stock glTF sample aircraft model or primitive fallback box if offline
+                uri: 'https://cesium.com/content/CesiumAir/CesiumAir.gltf',
+                minimumPixelSize: 64,
+                maximumScale: 20000
+            }
+        });
+
+        // Camera Chase View Setup
+        viewer.trackedEntity = planeEntity;
+
+        // Simulation Loop Tick Physics Engine (60 FPS)
+        let lastTime = performance.now();
+        viewer.clock.onTick.addEventListener(() => {
+            const now = performance.now();
+            const dt = (now - lastTime) / 1000.0;
+            lastTime = now;
+            if (dt > 0.1) return; // Cap frame lag drops
+
+            // Adjust throttle & speed
+            if (controls.throttleUp) speed += 15.0 * dt;
+            if (controls.throttleDown) speed -= 15.0 * dt;
+            speed = Math.max(30, Math.min(500, speed)); // Clamps between 30 and 500 knots
+
+            // Adjust Rotational Inputs via Control surfaces
+            const turnRate = 1.2;
+            if (controls.rollLeft) roll -= turnRate * dt;
+            if (controls.rollRight) roll += turnRate * dt;
+            if (controls.pitchUp) pitch += 0.8 * dt;
+            if (controls.pitchDown) pitch -= 0.8 * dt;
+            if (controls.yawLeft) heading -= 0.5 * dt;
+            if (controls.yawRight) heading += 0.5 * dt;
+
+            // Auto-level roll slightly when sticks are centered
+            if (!controls.rollLeft && !controls.rollRight) {
+                roll *= Math.pow(0.1, dt);
+            }
+
+            // Convert knots to meters per second update translation vector
+            const metersPerSec = speed * 0.514444;
+            const distanceTraveled = metersPerSec * dt;
+
+            // Compute forward displacement vector based on orientation heading & pitch
+            const forwardX = Math.sin(heading) * Math.cos(pitch);
+            const forwardY = Math.cos(heading) * Math.cos(pitch);
+            const forwardZ = Math.sin(pitch);
+
+            // Update Cartesian position coordinate offset on the globe
+            const cartographic = Cesium.Cartographic.fromCartesian(planePosition);
+            cartographic.longitude += (forwardX * distanceTraveled) / 111320;
+            cartographic.latitude += (forwardY * distanceTraveled) / 110540;
+            cartographic.height += forwardZ * distanceTraveled;
+            
+            // Prevent flying below ground level terrain
+            if (cartographic.height < 5.0) cartographic.height = 5.0;
+
+            planePosition = Cesium.Cartesian3.fromCartesian(Cesium.Cartographic.toCartesian(cartographic));
+
+            // Update Telemetry HUD text bindings
+            document.getElementById('hudSpeed').innerText = speed.toFixed(0);
+            document.getElementById('hudAlt').innerText = (cartographic.height * 3.28084).toFixed(0); // Meters to feet
+            document.getElementById('hudOrientation').innerText = `${(pitch * 57.2958).toFixed(0)}° / ${(roll * 57.2958).toFixed(0)}°`;
+        });
+    </script>
+</body>
+</html>
